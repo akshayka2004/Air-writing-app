@@ -556,7 +556,7 @@ export function useAirCanvas(
       // ── Step 4: Interactions (Drawing, Erasing, Grabbing, Pinching) ──────────
       const primary     = tracking.hands[tracking.primaryHandIndex];
       const hasHand     = tracking.hands.length > 0;
-      let isDrawing     = false; // ONLY pinch will trigger drawing intent now! (Not raw index finger extending)
+      let isDrawing     = g === "DRAW"; // Restored strictly back to optimal 1-finger trace mapping for pristine framerates!
       const isErasing   = g === "ERASE" || opts.activeTool === "eraser";
       const isPenOrHL   = opts.activeTool === "pen" || opts.activeTool === "highlighter";
       const isGrab      = g === "GRAB";

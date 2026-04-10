@@ -38,12 +38,13 @@ function getFingers(lms: HandLandmark[]) {
 function classifyRaw(lms: HandLandmark[]): GestureType {
   const f = getFingers(lms);
   
-  // PINCH
-  const pinchDist = Math.hypot(lms[4].x - lms[8].x, lms[4].y - lms[8].y);
-  if (pinchDist < 0.045) return "PINCH"; // Tighter threshold for stability
-
   // GRAB / FIST: all fingers closed
   if (!f.index && !f.middle && !f.ring && !f.pinky) return "GRAB";
+
+  // PINCH
+  const pinchDist = Math.hypot(lms[4].x - lms[8].x, lms[4].y - lms[8].y);
+  if (pinchDist < 0.06) return "PINCH"; 
+
 
   // DRAW: only index extended
   if (f.index && !f.middle && !f.ring && !f.pinky)  return "DRAW";
