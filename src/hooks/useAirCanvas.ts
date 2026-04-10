@@ -630,18 +630,26 @@ export function useAirCanvas(
         if (isGrab && !cb.isOpen && !isDrawingRef.current) {
           if (!dragRef.current) {
             // Initiate drag
-            const closest = getClosestStroke(smoothX, smoothY, strokesRef.current);
-            if (closest && closest.dist < 50) {
+            // A fist inherently retracts the index tip landmarks down to the palm, shifting coordinates downwards.
+            // Therefore we lock onto the element that was hovered just BEFORE the fist was closed!
+            let targetId = hoverRef.current;
+            if (!targetId) {
+              const closest = getClosestStroke(smoothX, smoothY, strokesRef.current);
+              // Larger threshold fallback since their hand is now shifted into a fist
+              if (closest && closest.dist < 120) targetId = closest.id; 
+            }
+
+            if (targetId) {
               const curStrokes = strokesRef.current;
-              const targetStroke = curStrokes.find((s) => s.id === closest.id);
+              const targetStroke = curStrokes.find((s) => s.id === targetId);
               if (targetStroke) {
                 undoRef.current = [...undoRef.current, curStrokes.map(s => ({...s, points: [...s.points], boundingBox: s.boundingBox ? {...s.boundingBox} : undefined}))];
                 redoRef.current = [];
                 setUndoCount(undoRef.current.length);
                 setRedoCount(0);
 
-                dragRef.current = { id: closest.id, lastX: smoothX, lastY: smoothY, offsetX: 0, offsetY: 0, inWasteBin: false };
-                setDraggedStrokeId(closest.id);
+                dragRef.current = { id: targetId, lastX: smoothX, lastY: smoothY, offsetX: 0, offsetY: 0, inWasteBin: false };
+                setDraggedStrokeId(targetId);
                 // Reset KF to avoid sudden jumps
                 kfX.current.reset(smoothX);
                 kfY.current.reset(smoothY);
