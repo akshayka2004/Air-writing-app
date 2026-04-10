@@ -62,14 +62,14 @@ export const Toolbar = ({
   return (
     <div
       className="h-full flex flex-col"
-      style={{ width: 64 }}
+      style={{ width: 80 }}
     >
       {/* ── Scrollable body ── */}
       <div
         className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin"
         style={{ scrollbarWidth: "none" }}
       >
-        <div className="flex flex-col gap-1.5 py-2">
+        <div className="flex flex-col gap-5 py-4">
 
           {/* ═══ DRAWING TOOLS ═══ */}
           <Section label="Tools">
@@ -98,7 +98,7 @@ export const Toolbar = ({
 
           {/* ═══ COLOR PALETTE ═══ */}
           <Section label="Color">
-            <div className="flex flex-col gap-1.5 items-center px-1 py-1">
+            <div className="flex flex-col gap-2.5 items-center px-1 py-1">
               {/* Active color preview */}
               <div
                 className="w-8 h-8 rounded-xl border-2 border-white/20 shadow-lg flex-shrink-0"
@@ -112,9 +112,9 @@ export const Toolbar = ({
                     title={c.name}
                     onClick={() => setActiveColor(c.value)}
                     className={cn(
-                      "w-5 h-5 rounded-md transition-all duration-150",
+                      "w-6 h-6 rounded-md transition-all duration-150",
                       activeColor === c.value
-                        ? "scale-125 ring-2 ring-white/60 ring-offset-1 ring-offset-black/50"
+                        ? "scale-110 ring-2 ring-white/60 ring-offset-1 ring-offset-black/50"
                         : "hover:scale-110 ring-1 ring-black/20"
                     )}
                     style={{ backgroundColor: c.value }}
@@ -153,7 +153,7 @@ export const Toolbar = ({
 
           {/* ═══ GLOW ═══ */}
           <Section label="Glow">
-            <div className="flex flex-col items-center gap-1 px-1 pb-1">
+            <div className="flex flex-col items-center gap-2 px-1 pb-1 pt-1">
               <input
                 type="range" min={0} max={25} step={1}
                 value={settings.glowIntensity}
@@ -193,31 +193,31 @@ export const Toolbar = ({
               title={settings.showFingerTrace ? "Hide trace" : "Show trace"}
               onClick={() => onSettingsChange({ showFingerTrace: !settings.showFingerTrace })}
               className={cn(
-                "h-9 w-full flex items-center justify-center rounded-xl transition-all",
+                "h-11 w-full flex items-center justify-center rounded-xl transition-all",
                 settings.showFingerTrace ? "bg-violet-500/15 text-violet-400" : "text-white/20 hover:text-white/50 hover:bg-white/5"
               )}
             >
-              {settings.showFingerTrace ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              {settings.showFingerTrace ? <Eye className="w-5 h-5" /> : <EyeOff className="w-5 h-5" />}
             </button>
             <button
               title={settings.faceAnchorEnabled ? "Face anchor: ON" : "Face anchor: OFF"}
               onClick={() => onSettingsChange({ faceAnchorEnabled: !settings.faceAnchorEnabled })}
               className={cn(
-                "h-9 w-full flex items-center justify-center rounded-xl transition-all",
+                "h-11 w-full flex items-center justify-center rounded-xl transition-all",
                 settings.faceAnchorEnabled ? "bg-emerald-500/15 text-emerald-400" : "text-white/20 hover:text-white/50 hover:bg-white/5"
               )}
             >
-              {settings.faceAnchorEnabled ? <Smile className="w-4 h-4" /> : <CircleDashed className="w-4 h-4" />}
+              {settings.faceAnchorEnabled ? <Smile className="w-5 h-5" /> : <CircleDashed className="w-5 h-5" />}
             </button>
             <button
               title="Settings"
               onClick={onToggleSettings}
               className={cn(
-                "h-9 w-full flex items-center justify-center rounded-xl transition-all",
+                "h-11 w-full flex items-center justify-center rounded-xl transition-all",
                 showSettings ? "bg-amber-500/15 text-amber-400" : "text-white/20 hover:text-white/50 hover:bg-white/5"
               )}
             >
-              <Settings className="w-4 h-4" />
+              <Settings className="w-5 h-5" />
             </button>
           </Section>
 
@@ -227,16 +227,16 @@ export const Toolbar = ({
               <button
                 onClick={onPdfPrev}
                 disabled={pdfPage === 1}
-                className="h-8 w-full flex items-center justify-center rounded-lg text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-20 transition-all"
+                className="h-10 w-full flex items-center justify-center rounded-lg text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-20 transition-all"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-5 h-5" />
               </button>
               <button
                 onClick={onPdfNext}
                 disabled={pdfPage === pdfNumPages}
-                className="h-8 w-full flex items-center justify-center rounded-lg text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-20 transition-all"
+                className="h-10 w-full flex items-center justify-center rounded-lg text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-20 transition-all"
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-5 h-5" />
               </button>
             </Section>
           )}
@@ -274,7 +274,7 @@ const Section = ({ label, children }: { label: string; children: React.ReactNode
     <span className="text-[7px] font-black text-white/20 uppercase tracking-[0.25em] px-1 mb-1 mt-1">
       {label}
     </span>
-    <div className="flex flex-col gap-0.5 bg-white/4 rounded-xl p-1 border border-white/5">
+    <div className="flex flex-col gap-2.5 bg-white/4 rounded-xl p-2 border border-white/5">
       {children}
     </div>
   </div>
@@ -287,7 +287,7 @@ const SideBtn = ({
   icon: React.ReactNode; label: string; active?: boolean; onClick: () => void;
   danger?: boolean; success?: boolean; color?: string; disabled?: boolean;
 }) => {
-  const base = "h-9 w-full flex items-center justify-center rounded-xl transition-all duration-150 relative group";
+  const base = "h-11 w-full flex flex-col pt-1.5 items-center justify-center rounded-xl transition-all duration-150 relative group";
   let cls = "";
 
   if (active && color) cls = `text-white shadow-lg`;

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Toolbar, Tool } from "@/components/ui/Toolbar";
 import { AppSettings, DEFAULT_SETTINGS } from "@/types";
-import { Camera, Monitor, ImageIcon, FileText, HelpCircle, X, Smile } from "lucide-react";
+import { Camera, Monitor, ImageIcon, FileText, HelpCircle, X, Smile, Trash2 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { BackgroundType } from "@/components/canvas/BackgroundLayer";
@@ -43,6 +43,9 @@ export default function Home() {
     settings,
     dominantHandPref: settings.dominantHand,
     faceAnchorEnabled: settings.faceAnchorEnabled,
+    onColorSelect: setActiveColor,
+    onDragUpdate: (id, dx, dy) => canvasRef.current?.updateDragOffset(id, dx, dy),
+    onDragEnd: (id) => canvasRef.current?.resetDragOffset(id),
   });
 
   // ── Camera Initialization ────────────────────────────────────────────────
@@ -171,7 +174,51 @@ export default function Home() {
         strokes={engine.strokes}
         backgroundDataUrl={bgDataUrl}
         backgroundBounds={bgBounds}
+        hoveredStrokeId={engine.hoveredStrokeId}
+        draggedStrokeId={engine.draggedStrokeId}
       />
+
+      {/* ── COLOR BAR OVERLAY ── */}
+      {engine.colorBar.isOpen && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] flex gap-3 p-3 rounded-2xl bg-black/80 backdrop-blur-xl border border-white/20 shadow-2xl transition-all duration-300 pointer-events-none">
+          {["#000000", "#ef4444", "#3b82f6", "#22c55e", "#eab308", "#ffffff", "#a78bfa"].map((c) => (
+            <div
+              key={c}
+              className={cn(
+                "w-12 h-12 rounded-xl border-2 flex items-center justify-center transition-all duration-150 relative",
+                engine.colorBar.hoveredColor === c ? "scale-[1.3] border-white shadow-[0_0_20px_rgba(255,255,255,0.6)] z-10" : "border-white/10 scale-100 opacity-60"
+              )}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+          <div className="absolute -bottom-6 w-full text-center text-white/50 text-[10px] font-bold uppercase tracking-widest pointer-events-none">
+            Release pinch to select
+          </div>
+        </div>
+      )}
+
+      {/* ── PINCH ZONE INDICATOR ── */}
+      {engine.handCount > 0 && !engine.colorBar.isOpen && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center justify-center pointer-events-none opacity-40">
+           <div className="h-1 w-24 bg-gradient-to-r from-transparent via-white/50 to-transparent rounded-full mb-1" />
+           <span className="text-[8px] font-black uppercase tracking-[0.4em] text-white/50">Pinch For Color</span>
+        </div>
+      )}
+
+      {/* ── WASTE BIN ── */}
+      {engine.isGrabbing && (
+        <div className={cn(
+          "absolute bottom-8 left-1/2 -translate-x-1/2 z-40 transition-all duration-300 pointer-events-none flex flex-col items-center justify-center rounded-3xl border-2 px-10 py-6 backdrop-blur-md",
+          engine.inWasteBin 
+            ? "border-red-500 bg-red-500/20 scale-110 shadow-[0_0_40px_rgba(239,68,68,0.5)]" 
+            : "border-white/20 bg-black/40 scale-100"
+        )}>
+          <Trash2 className={cn("w-8 h-8 mb-2 transition-colors", engine.inWasteBin ? "text-red-400" : "text-white/40")} />
+          <span className={cn("text-xs font-black tracking-widest uppercase", engine.inWasteBin ? "text-red-300" : "text-white/30")}>
+            {engine.inWasteBin ? "Release to Delete" : "Drop here to discard"}
+          </span>
+        </div>
+      )}
 
       {/* ── COMMAND FLASH & HOLD RING ── */}
       {engine.clearProgress > 0 && engine.clearProgress < 1 && (
@@ -197,9 +244,9 @@ export default function Home() {
       )}
 
       {/* ── TOP NAV ── */}
-      <nav className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-3 pointer-events-none">
-        <div className="flex items-center gap-2 pointer-events-auto">
-          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 shadow-lg">
+      <nav className="absolute top-0 left-0 right-0 z-50 flex flex-wrap sm:flex-nowrap items-start sm:items-center justify-between px-2 sm:px-4 py-2 sm:py-3 pointer-events-none gap-2">
+        <div className="flex flex-wrap items-center gap-2 pointer-events-auto">
+          <div className="flex items-center gap-2.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 shadow-lg mb-1 sm:mb-0">
             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center"><Camera className="w-4 h-4 text-white" /></div>
             <div className="leading-none">
               <p className="text-sm font-black text-white tracking-tight">AirWrite</p>
@@ -213,7 +260,7 @@ export default function Home() {
           </div>
           {faceStrokes > 0 && <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-950/80 border border-emerald-500/30 backdrop-blur-md shadow-lg"><Smile className="w-3.5 h-3.5 text-emerald-400" /><span className="text-[10px] font-black text-emerald-400 uppercase tracking-wider">{faceStrokes} anchored</span></div>}
         </div>
-        <div className="flex items-center gap-2 pointer-events-auto">
+        <div className="flex flex-wrap items-center gap-2 pointer-events-auto justify-end">
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 shadow-lg">
             <span className={`w-1.5 h-1.5 rounded-full ${engine.gesture !== "IDLE" ? "bg-blue-400 animate-pulse" : engine.handCount > 0 ? "bg-emerald-400" : "bg-white/20"}`} />
             <span className="text-[9px] font-black text-white/60 uppercase tracking-[0.2em]">{engine.handCount > 0 ? `${engine.gesture} · ${engine.handCount}H${hasFace ? " · 😊" : ""}` : "No Hand Detected"}</span>
@@ -224,7 +271,7 @@ export default function Home() {
       </nav>
 
       {/* ── LEFT TOOLBAR ── */}
-      <aside className="absolute left-3 top-16 bottom-10 z-50 flex items-start pointer-events-none">
+      <aside className="absolute left-2 sm:left-3 top-20 sm:top-16 bottom-4 sm:bottom-10 z-50 flex items-start pointer-events-none">
         <div className="pointer-events-auto h-full rounded-2xl border border-white/8 overflow-hidden" style={{ background: "rgba(8,8,20,0.92)", backdropFilter: "blur(20px)", boxShadow: "0 0 0 1px rgba(255,255,255,0.05), 0 25px 60px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.07)" }}>
           <Toolbar
             activeTool={activeTool}       setActiveTool={setActiveTool}

@@ -38,6 +38,8 @@ export type Stroke = {
   isJustDot?: boolean;
   /** If set, this stroke moves with the face */
   faceAnchor?: FaceAnchor;
+  /** Bounding box for selection */
+  boundingBox?: { minX: number; minY: number; maxX: number; maxY: number };
 };
 
 export type GestureType =
@@ -47,6 +49,7 @@ export type GestureType =
   | 'UNDO'
   | 'REDO'
   | 'PINCH'
+  | 'GRAB'
   | 'CLEAR_HOLD'; // 4-finger hold-to-clear
 
 export interface HandLandmark {

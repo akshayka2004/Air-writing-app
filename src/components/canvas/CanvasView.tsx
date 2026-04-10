@@ -1,6 +1,6 @@
 "use client";
 
-import { useImperativeHandle, forwardRef, useRef, useEffect } from "react";
+import { useImperativeHandle, forwardRef, useRef, useEffect, useState } from "react";
 import { Stage, Layer, Line, Circle, Image as KonvaImage, Group } from "react-konva";
 import { Stroke, FaceData } from "@/types";
 
@@ -21,13 +21,16 @@ interface CanvasViewProps {
   glowIntensity:  number;
   faceData:       FaceData | null;
   strokes:        Stroke[];
-  // Background for composite export
   backgroundDataUrl?: string;
   backgroundBounds?:  { x: number; y: number; width: number; height: number };
+  hoveredStrokeId?:   string | null;
+  draggedStrokeId?:   string | null;
 }
 
 export type CanvasHandle = {
   exportImage: () => Promise<string>;
+  updateDragOffset: (id: string, dx: number, dy: number) => void;
+  resetDragOffset: (id: string) => void;
 };
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -41,27 +44,46 @@ export const CanvasView = forwardRef<CanvasHandle, CanvasViewProps>(
       strokes,
       backgroundDataUrl,
       backgroundBounds,
+      hoveredStrokeId,
+      draggedStrokeId,
     },
     ref
   ) => {
     const stageRef       = useRef<any>(null);
-    const bgImageRef     = useRef<HTMLImageElement | null>(null);
+    const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
+    const groupsRef      = useRef<Record<string, any>>({});
 
-    // ── Export ───────────────────────────────────────────────────────────────
+    // ── Export & Imperative API ──────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
       exportImage: async () => {
         if (!stageRef.current) return "";
         return stageRef.current.toDataURL({ pixelRatio: 2 });
       },
+      updateDragOffset: (id: string, dx: number, dy: number) => {
+        const node = groupsRef.current[id];
+        if (node) {
+          node.x(dx);
+          node.y(dy);
+        }
+      },
+      resetDragOffset: (id: string) => {
+        const node = groupsRef.current[id];
+        if (node) {
+          node.x(0);
+          node.y(0);
+        }
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }));
 
     // ── Background image loader ───────────────────────────────────────────────
     useEffect(() => {
-      if (!backgroundDataUrl) { bgImageRef.current = null; return; }
+      // eslint-disable-next-line
+      if (!backgroundDataUrl) { setBgImage(null); return; }
       const img = new window.Image();
       img.crossOrigin = "anonymous";
-      img.onload  = () => { bgImageRef.current = img; };
-      img.onerror = () => { bgImageRef.current = null; };
+      img.onload  = () => { setBgImage(img); };
+      img.onerror = () => { setBgImage(null); };
       img.src = backgroundDataUrl;
     }, [backgroundDataUrl]);
 
@@ -72,10 +94,10 @@ export const CanvasView = forwardRef<CanvasHandle, CanvasViewProps>(
         {/* ── Committed strokes via Konva ── */}
         <Stage width={width} height={height} ref={stageRef} className="absolute inset-0">
           {/* Background (for composite export only) */}
-          {bgImageRef.current && backgroundBounds && (
+          {bgImage && backgroundBounds && (
             <Layer listening={false}>
               <KonvaImage
-                image={bgImageRef.current}
+                image={bgImage}
                 x={backgroundBounds.x}
                 y={backgroundBounds.y}
                 width={backgroundBounds.width}
@@ -88,15 +110,23 @@ export const CanvasView = forwardRef<CanvasHandle, CanvasViewProps>(
           {/* Strokes layer */}
           <Layer listening={false}>
             {strokes.map((stroke) => {
-              const { shadowColor, shadowBlur } = getNeonGlow(
-                stroke.color,
-                stroke.glowIntensity ?? glowIntensity
-              );
+              const isHovered = stroke.id === hoveredStrokeId;
+              const isDragged = stroke.id === draggedStrokeId;
               const isHighlighter = stroke.tool === "highlighter";
 
-              // Face-anchor delta
+              let glowC = stroke.color;
+              let glowI = stroke.glowIntensity ?? glowIntensity;
+              if (isDragged) { glowC = "#ffffff"; glowI = 25; }
+              else if (isHovered) { glowC = "#ffffff"; glowI = 15; }
+
+              const { shadowColor, shadowBlur } = getNeonGlow(glowC, glowI);
+              
+              let effectiveOpacity = isHighlighter ? 0.35 : 1;
+              if (isDragged) effectiveOpacity = Math.max(0.8, effectiveOpacity);
+
+              // Face-anchor OR Drag translation delta
               let dx = 0, dy = 0;
-              if (stroke.faceAnchor && faceData) {
+              if (stroke.faceAnchor && faceData && !isDragged) {
                 dx = faceData.screenCx - stroke.faceAnchor.cx;
                 dy = faceData.screenCy - stroke.faceAnchor.cy;
               }
@@ -107,7 +137,7 @@ export const CanvasView = forwardRef<CanvasHandle, CanvasViewProps>(
                 const cy = stroke.points[1];
                 const r  = Math.max((stroke.width ?? 4) * 0.65, 2.5);
                 return (
-                  <Group key={stroke.id} x={dx} y={dy}>
+                  <Group key={stroke.id} x={dx} y={dy} ref={(node) => { if (node) groupsRef.current[stroke.id] = node; }}>
                     <Circle
                       x={cx} y={cy} radius={r}
                       fill={stroke.color}
@@ -122,18 +152,18 @@ export const CanvasView = forwardRef<CanvasHandle, CanvasViewProps>(
               }
 
               return (
-                <Group key={stroke.id} x={dx} y={dy}>
+                <Group key={stroke.id} x={dx} y={dy} ref={(node) => { if (node) groupsRef.current[stroke.id] = node; }}>
                   <Line
                     points={stroke.points}
-                    stroke={stroke.color}
+                    stroke={isHovered || isDragged ? "#ffffff" : stroke.color}
                     strokeWidth={isHighlighter ? stroke.width * 3 : stroke.width}
                     tension={0.4}
                     lineCap="round"
                     lineJoin="round"
-                    opacity={isHighlighter ? 0.35 : 1}
+                    opacity={effectiveOpacity}
                     shadowColor={shadowColor}
                     shadowBlur={isHighlighter ? shadowBlur * 0.5 : shadowBlur}
-                    shadowOpacity={0.85}
+                    shadowOpacity={isDragged ? 1 : 0.85}
                     shadowForStrokeEnabled
                     perfectDrawEnabled={false}
                     listening={false}

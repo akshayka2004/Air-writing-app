@@ -48,6 +48,39 @@ const CONNECTIONS: [number, number][] = [
 const TIPS       = [4, 8, 12, 16, 20];
 const TIP_COLORS = ["#a78bfa", "#60a5fa", "#34d399", "#f472b6", "#fb923c"];
 
+// ─── Distance helpers ─────────────────────────────────────────────────────────
+function distToSegmentSquared(px: number, py: number, vx: number, vy: number, wx: number, wy: number) {
+  const l2 = (wx - vx) ** 2 + (wy - vy) ** 2;
+  if (l2 === 0) return (px - vx) ** 2 + (py - vy) ** 2;
+  let t = ((px - vx) * (wx - vx) + (py - vy) * (wy - vy)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return (px - (vx + t * (wx - vx))) ** 2 + (py - (vy + t * (wy - vy))) ** 2;
+}
+
+function getClosestStroke(px: number, py: number, strokes: Stroke[]): { id: string, dist: number } | null {
+  let closestId: string | null = null;
+  let minDist = Infinity;
+  for (let sIdx = strokes.length - 1; sIdx >= 0; sIdx--) {
+    const s = strokes[sIdx];
+    if (s.boundingBox) {
+      const pad = 40;
+      if (px < s.boundingBox.minX - pad || px > s.boundingBox.maxX + pad ||
+          py < s.boundingBox.minY - pad || py > s.boundingBox.maxY + pad) continue;
+    }
+    const pts = s.points;
+    if (s.isJustDot && pts.length >= 2) {
+      const d2 = (px - pts[0]) ** 2 + (py - pts[1]) ** 2;
+      if (d2 < minDist) { minDist = d2; closestId = s.id; }
+    } else {
+      for (let i = 0; i < pts.length - 2; i += 2) {
+        const d2 = distToSegmentSquared(px, py, pts[i], pts[i+1], pts[i+2], pts[i+3]);
+        if (d2 < minDist) { minDist = d2; closestId = s.id; }
+      }
+    }
+  }
+  return closestId ? { id: closestId, dist: Math.sqrt(minDist) } : null;
+}
+
 // ─── Public interface ─────────────────────────────────────────────────────────
 export interface AirCanvasOptions {
   activeTool:       Tool;
@@ -57,6 +90,9 @@ export interface AirCanvasOptions {
   settings:         AppSettings;
   dominantHandPref: "auto" | "left" | "right";
   faceAnchorEnabled: boolean;
+  onColorSelect?:    (c: string) => void;
+  onDragUpdate?:     (id: string, dx: number, dy: number) => void;
+  onDragEnd?:        (id: string) => void;
 }
 
 export interface AirCanvasActions {
@@ -77,6 +113,11 @@ export interface AirCanvasReturn {
   undoCount:    number;
   redoCount:    number;
   actions:      AirCanvasActions;
+  colorBar:     { isOpen: boolean; hoveredColor: string | null };
+  hoveredStrokeId: string | null;
+  draggedStrokeId: string | null;
+  isGrabbing: boolean;
+  inWasteBin: boolean;
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -172,6 +213,15 @@ export function useAirCanvas(
   const [lastCommand,  setLastCommand]  = useState<string | null>(null);
   const [faceData,     setFaceData]     = useState<FaceData | null>(null);
   const faceDataRef = useRef<FaceData | null>(null);
+
+  // ── Advanced interactions state ─────────────────────────────────────────────
+  const [colorBar, setColorBar] = useState<{ isOpen: boolean; hoveredColor: string | null }>({ isOpen: false, hoveredColor: null });
+  const [hoveredStrokeId, setHoveredStrokeId] = useState<string | null>(null);
+  const [draggedStrokeId, setDraggedStrokeId] = useState<string | null>(null);
+  
+  const colorBarRef = useRef({ isOpen: false, hoveredColor: null as string | null, pinchStartMs: 0 });
+  const hoverRef = useRef<string | null>(null);
+  const dragRef = useRef<{ id: string; lastX: number; lastY: number; offsetX: number; offsetY: number; inWasteBin: boolean } | null>(null);
 
   // ── Gesture engine (pure mutable object, never triggers re-render) ──────────
   const engineRef = useRef(makeEngine());
@@ -291,6 +341,8 @@ export function useAirCanvas(
       const isDot = count <= 4 && elapsed < 220 && moved < 14;
 
       let flat: number[];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      
       if (isDot) {
         // Small tap → emit a filled dot circle
         const cx = ptsX.current[Math.floor(count / 2)];
@@ -299,7 +351,11 @@ export function useAirCanvas(
         flat = [];
         for (let i = 0; i <= 8; i++) {
           const a = (i / 8) * Math.PI * 2;
-          flat.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+          const px = cx + Math.cos(a) * r;
+          const py = cy + Math.sin(a) * r;
+          flat.push(px, py);
+          if (px < minX) minX = px; if (px > maxX) maxX = px;
+          if (py < minY) minY = py; if (py > maxY) maxY = py;
         }
       } else if (count < 2) {
         // Too short — discard
@@ -310,7 +366,13 @@ export function useAirCanvas(
         return;
       } else {
         flat = [];
-        for (let i = 0; i < count; i++) flat.push(ptsX.current[i], ptsY.current[i]);
+        for (let i = 0; i < count; i++) {
+          const px = ptsX.current[i];
+          const py = ptsY.current[i];
+          flat.push(px, py);
+          if (px < minX) minX = px; if (px > maxX) maxX = px;
+          if (py < minY) minY = py; if (py > maxY) maxY = py;
+        }
       }
 
       const newStroke: Stroke = {
@@ -322,6 +384,7 @@ export function useAirCanvas(
         glowIntensity: opts.glowIntensity,
         isJustDot:    isDot,
         faceAnchor:   faceAnchorRef.current ?? undefined,
+        boundingBox:  { minX, minY, maxX, maxY },
       };
 
       const cur  = strokesRef.current;
@@ -490,23 +553,172 @@ export function useAirCanvas(
       // ── Step 3: Hand trace ────────────────────────────────────────────────
       drawHandTrace(tracking.hands, g, W, H, opts.settings);
 
-      // ── Step 4: Drawing / Erasing ─────────────────────────────────────────
+      // ── Step 4: Interactions (Drawing, Erasing, Grabbing, Pinching) ──────────
       const primary     = tracking.hands[tracking.primaryHandIndex];
       const hasHand     = tracking.hands.length > 0;
-      const isDrawing   = g === "DRAW";
+      let isDrawing     = g === "DRAW";
       const isErasing   = g === "ERASE" || opts.activeTool === "eraser";
       const isPenOrHL   = opts.activeTool === "pen" || opts.activeTool === "highlighter";
+      const isGrab      = g === "GRAB";
+      const isPinchNow  = g === "PINCH";
 
-      if ((isDrawing || isErasing) && primary) {
+      if (primary) {
         const tip    = primary.landmarks[8]; // Index fingertip
         const smoothX = kfX.current.update((1 - tip.x) * W);
         const smoothY = kfY.current.update(tip.y * H);
 
-        // ── DRAW ──────────────────────────────────────────────────────────
-        if (isDrawing && isPenOrHL) {
+        // ── PINCH (Color Bar) ──────────────────────────────────────────────
+        const cb = colorBarRef.current;
+        if (cb.isOpen) {
+          // Slide to pick color
+          const tX = Math.max(0, Math.min(1, smoothX / W));
+          const colorOpts = ["#000000", "#ef4444", "#3b82f6", "#22c55e", "#eab308", "#ffffff", "#a78bfa"];
+          const colIdx = Math.min(colorOpts.length - 1, Math.floor(tX * colorOpts.length));
+          const hCol = colorOpts[colIdx];
+          
+          if (cb.hoveredColor !== hCol) {
+            cb.hoveredColor = hCol;
+            setColorBar({ isOpen: true, hoveredColor: hCol });
+          }
+          
+          cb.pinchStartMs = isPinchNow ? now : cb.pinchStartMs;
+          // Selection confirmed on release (add 150ms debounce for flicker)
+          if (!isPinchNow && (now - cb.pinchStartMs > 150)) {
+            if (opts.onColorSelect) opts.onColorSelect(hCol);
+            cb.isOpen = false;
+            cb.hoveredColor = null;
+            setColorBar({ isOpen: false, hoveredColor: null });
+          }
+          isDrawing = false;
+        } else {
+          // Determine if pinch should open color bar or draw
+          if (isPinchNow) {
+            if (tip.y < 0.35 && !isDrawingRef.current) {
+              if (cb.pinchStartMs === 0) cb.pinchStartMs = now;
+              else if (now - cb.pinchStartMs > 100) {
+                cb.isOpen = true;
+                setColorBar({ isOpen: true, hoveredColor: null });
+              }
+              isDrawing = false;
+            } else {
+              isDrawing = true; // Canvas pinch = draw
+              cb.pinchStartMs = 0;
+            }
+          } else {
+            // Only reset if they clearly dropped the pinch for a bit, or just instantly
+            cb.pinchStartMs = 0;
+          }
+        }
 
+        // ── HOVER ──────────────────────────────────────────────────────────
+        // Only show hover if not drawing/grabbing
+        if (g === "IDLE" && !cb.isOpen && !dragRef.current && !isDrawingRef.current) {
+          const closest = getClosestStroke(smoothX, smoothY, strokesRef.current);
+          const newHoverId = (closest && closest.dist < 50) ? closest.id : null;
+          if (newHoverId !== hoverRef.current) {
+            hoverRef.current = newHoverId;
+            setHoveredStrokeId(newHoverId);
+          }
+        } else {
+          if (hoverRef.current !== null) {
+            hoverRef.current = null;
+            setHoveredStrokeId(null);
+          }
+        }
+
+        // ── GRAB AND MOVE ──────────────────────────────────────────────────
+        if (isGrab && !cb.isOpen && !isDrawingRef.current) {
+          if (!dragRef.current) {
+            // Initiate drag
+            const closest = getClosestStroke(smoothX, smoothY, strokesRef.current);
+            if (closest && closest.dist < 50) {
+              const curStrokes = strokesRef.current;
+              const targetStroke = curStrokes.find((s) => s.id === closest.id);
+              if (targetStroke) {
+                undoRef.current = [...undoRef.current, curStrokes.map(s => ({...s, points: [...s.points], boundingBox: s.boundingBox ? {...s.boundingBox} : undefined}))];
+                redoRef.current = [];
+                setUndoCount(undoRef.current.length);
+                setRedoCount(0);
+
+                dragRef.current = { id: closest.id, lastX: smoothX, lastY: smoothY, offsetX: 0, offsetY: 0, inWasteBin: false };
+                setDraggedStrokeId(closest.id);
+                // Reset KF to avoid sudden jumps
+                kfX.current.reset(smoothX);
+                kfY.current.reset(smoothY);
+              }
+            }
+          } else {
+            // Continue drag (accumulate offset)
+            const dx = smoothX - dragRef.current.lastX;
+            const dy = smoothY - dragRef.current.lastY;
+            dragRef.current.lastX = smoothX;
+            dragRef.current.lastY = smoothY;
+            dragRef.current.offsetX += dx;
+            dragRef.current.offsetY += dy;
+
+            // Check if inside Waste Bin (bottom-center area)
+            const inWaste = smoothY > H - 150 && Math.abs(smoothX - W / 2) < 150;
+            dragRef.current.inWasteBin = inWaste;
+            
+            // Native GPU Node update to bypass React
+            if (opts.onDragUpdate) {
+               opts.onDragUpdate(dragRef.current.id, dragRef.current.offsetX, dragRef.current.offsetY);
+            }
+
+            // INSTANT DELETE: if inside waste bin, delete immediately without waiting for drop release
+            if (inWaste) {
+              const curStrokes = [...strokesRef.current];
+              const tIdx = curStrokes.findIndex((s) => s.id === dragRef.current!.id);
+              if (tIdx !== -1) {
+                curStrokes.splice(tIdx, 1);
+                strokesRef.current = curStrokes;
+                setStrokes(curStrokes);
+              }
+              if (opts.onDragEnd) opts.onDragEnd(dragRef.current.id);
+              dragRef.current = null;
+              setDraggedStrokeId(null);
+            }
+          }
+        } else {
+          // Release grab (if not already deleted)
+          if (dragRef.current) {
+            const curStrokes = [...strokesRef.current];
+            const tIdx = curStrokes.findIndex((s) => s.id === dragRef.current!.id);
+
+            if (opts.onDragEnd) {
+              opts.onDragEnd(dragRef.current.id);
+            }
+
+            if (tIdx !== -1 && (Math.abs(dragRef.current.offsetX) > 0.1 || Math.abs(dragRef.current.offsetY) > 0.1)) {
+              // Apply offset permanently upon drop
+              const s = { ...curStrokes[tIdx] };
+              const pts = new Float32Array(s.points);
+              for (let i = 0; i < pts.length; i += 2) {
+                pts[i] += dragRef.current.offsetX;
+                pts[i+1] += dragRef.current.offsetY;
+              }
+              s.points = Array.from(pts);
+              if (s.boundingBox) {
+                s.boundingBox = { 
+                  ...s.boundingBox, 
+                  minX: s.boundingBox.minX + dragRef.current.offsetX, 
+                  maxX: s.boundingBox.maxX + dragRef.current.offsetX, 
+                  minY: s.boundingBox.minY + dragRef.current.offsetY, 
+                  maxY: s.boundingBox.maxY + dragRef.current.offsetY 
+                };
+              }
+              curStrokes[tIdx] = s;
+              strokesRef.current = curStrokes;
+              setStrokes(curStrokes);
+            }
+            dragRef.current = null;
+            setDraggedStrokeId(null);
+          }
+        }
+
+        // ── DRAW ──────────────────────────────────────────────────────────
+        if (isDrawing && isPenOrHL && !cb.isOpen && !dragRef.current) {
           if (!isDrawingRef.current) {
-            // Stroke start
             isDrawingRef.current   = true;
             drawStartMsRef.current = now;
             drawStartPxRef.current = [smoothX, smoothY];
@@ -517,7 +729,6 @@ export function useAirCanvas(
             kfX.current.reset((1 - tip.x) * W);
             kfY.current.reset(tip.y * H);
 
-            // Face anchor detection at stroke start
             const fd = faceDataRef.current;
             if (fd && opts.faceAnchorEnabled &&
               tip.x >= fd.rawNormX && tip.x <= fd.rawNormX + fd.rawNormW &&
@@ -528,7 +739,6 @@ export function useAirCanvas(
             }
           }
 
-          // Sub-pixel dedup (avoids redundant bezier + GC)
           const cnt = ptCount.current;
           let skipPoint = false;
           if (cnt > 0) {
@@ -537,14 +747,11 @@ export function useAirCanvas(
           }
 
           if (!skipPoint) {
-            // Store point (pre-allocated, no heap allocation)
             if (cnt < MAX_PTS) {
               ptsX.current[cnt] = smoothX;
               ptsY.current[cnt] = smoothY;
               ptCount.current   = cnt + 1;
             }
-
-            // ── INCREMENTAL DRAW — O(1) per frame ──────────────────────────
             const sctx = strokeCanvasRef.current?.getContext("2d");
             if (sctx) {
               const isHL = opts.activeTool === "highlighter";
@@ -561,7 +768,6 @@ export function useAirCanvas(
               } else { sctx.shadowBlur = 0; }
 
               if (lastCtrlRef.current === null) {
-                // First point — draw a dot to start the stroke
                 sctx.beginPath();
                 sctx.arc(smoothX, smoothY, Math.max(sctx.lineWidth / 2, 1.5), 0, Math.PI * 2);
                 sctx.fillStyle   = opts.activeColor;
@@ -570,7 +776,6 @@ export function useAirCanvas(
                 lastMidRef.current  = [smoothX, smoothY];
                 lastCtrlRef.current = [smoothX, smoothY];
               } else {
-                // Midpoint quadratic bezier — smooth, continuous, O(1)
                 const [cx, cy] = lastCtrlRef.current;
                 const mx = (cx + smoothX) / 2;
                 const my = (cy + smoothY) / 2;
@@ -581,14 +786,12 @@ export function useAirCanvas(
                 lastMidRef.current  = [mx, my];
                 lastCtrlRef.current = [smoothX, smoothY];
               }
-
               sctx.shadowBlur  = 0;
               sctx.globalAlpha = 1;
             }
-          } // end if (!skipPoint)
-
+          }
+        } else if (isErasing && !cb.isOpen && !dragRef.current) {
         // ── ERASE ─────────────────────────────────────────────────────────
-        } else if (isErasing) {
           if (isDrawingRef.current) {
             isDrawingRef.current = false;
             ptCount.current      = 0;
@@ -606,11 +809,14 @@ export function useAirCanvas(
           const r   = opts.settings.eraserRadius;
           const cur = strokesRef.current;
           const next = cur.filter((s) => {
+            if (s.boundingBox) {
+              if (smoothX < s.boundingBox.minX - r || smoothX > s.boundingBox.maxX + r ||
+                  smoothY < s.boundingBox.minY - r || smoothY > s.boundingBox.maxY + r) return true;
+            }
             for (let i = 0; i < s.points.length; i += 2)
               if (Math.hypot(s.points[i] - smoothX, s.points[i + 1] - smoothY) < r) return false;
             return true;
           });
-          // Only trigger React re-render if strokes actually changed
           if (next.length !== cur.length) {
             strokesRef.current = next;
             setStrokes(next);
@@ -618,15 +824,30 @@ export function useAirCanvas(
         }
 
       } else {
-        // Gesture ended or no hand
+        // ── Gesture ended or no hand ─────────────────────────────────────
         if (isDrawingRef.current) {
           isDrawingRef.current = false;
           commitCurrentStroke(now);
         }
         if (eraseSnapRef.current) eraseSnapRef.current = false;
+        
+        if (colorBarRef.current.isOpen) {
+          colorBarRef.current.isOpen = false;
+          colorBarRef.current.hoveredColor = null;
+          setColorBar({ isOpen: false, hoveredColor: null });
+        }
+        if (dragRef.current) {
+          dragRef.current = null;
+          setDraggedStrokeId(null);
+        }
+        
         if (!hasHand) {
           kfX.current.reset(W * 0.5);
           kfY.current.reset(H * 0.5);
+          if (hoverRef.current !== null) {
+            hoverRef.current = null;
+            setHoveredStrokeId(null);
+          }
         }
       }
 
@@ -669,6 +890,9 @@ export function useAirCanvas(
     isReady, error,
     strokes, gesture, handCount, clearProgress, lastCommand, faceData,
     undoCount, redoCount,
+    colorBar, hoveredStrokeId, draggedStrokeId,
+    isGrabbing: dragRef.current !== null,
+    inWasteBin: dragRef.current?.inWasteBin ?? false,
     actions: { undo, redo, clear },
   };
 }
